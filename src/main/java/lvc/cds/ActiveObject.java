@@ -103,7 +103,9 @@ public class ActiveObject {
      * complete).
      */
     public void terminate() {
-        shouldTerminate = true;
+        try {
+            jobs.put(new AOTask<>(() -> shouldTerminate = true, null));
+        } catch (InterruptedException e) {}
     }
 
     /**
@@ -138,7 +140,6 @@ public class ActiveObject {
             if (shouldTerminate || future.isComplete())
                 return;
 
-            r = jobs.poll();
             r.runAndComplete();
         }
 	}
