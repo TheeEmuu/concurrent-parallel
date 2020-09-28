@@ -1,11 +1,11 @@
 package lvc.cds;
 
-import java.util.ArrayDeque;
-import java.util.Queue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 public class ActiveObject {
-    private Queue<AOTask> jobs;
+    private LinkedBlockingQueue<AOTask> jobs;
     private Thread workerThread;
     private boolean shouldTerminate;
     private Scheduler scheduler;
@@ -42,10 +42,17 @@ public class ActiveObject {
         }
     }
 
+    public ActiveObject() {
+        jobs = new LinkedBlockingQueue<>();
+        workerThread = new Thread(this::worker); // this is how you pass an instance method.
+        workerThread.start();
+        shouldTerminate = false;
+    }
+
     /// initialize an empty queue and our background thread.
     public ActiveObject(Scheduler s) {
         this.scheduler = s;
-        jobs = new ArrayDeque<>();
+        jobs = new LinkedBlockingQueue<>();
         workerThread = new Thread(this::worker); // this is how you pass an instance method.
         workerThread.start();
         shouldTerminate = false;
@@ -55,39 +62,38 @@ public class ActiveObject {
      * enqueue a task. This can execute any code
      */
 
-   public Future<Void> enqueue(Runnable r) {
+    public Future<Void> enqueue(Runnable r) {
         // place r in the queue. Notify the background thread.
-        synchronized (this) {
-            Future<Void> future = new Future<>(this);
-            jobs.add(new AOTask<Void>(r, future));
-            notifyAll();
-            return future;
+        Future<Void> future = new Future<>(this);
+        try {
+            jobs.put(new AOTask<Void>(r, future));
+        } catch (InterruptedException e) {
         }
+        return future;
+
     }
 
     public <R> Future<R> enqueue(Supplier<R> s) {
-        synchronized (this) {
-            Future<R> future = new Future<>(this);
-            jobs.add(new AOTask<R>(s, future));
-            notifyAll();
-            return future;
+        Future<R> future = new Future<>(this);
+        try {
+            jobs.put(new AOTask<R>(s, future));
+        } catch (InterruptedException e) {
         }
+        return future;
     }
 
     public <R> void enqueue(Supplier<R> s, Future<R> future) {
-        synchronized (this) {
-            jobs.add(new AOTask<R>(s, future));
-            notifyAll();
+        try {
+            jobs.put(new AOTask<R>(s, future));
+        } catch (InterruptedException e) {
         }
     }
 
     /**
-     * tell the worker thread to gracefully terminate. We have a choice to
-     * make:
-     *  + abort abruptly, killing whatever's in flight
-     *  + finish the current job, then killing the thread, even if
-     *  + more jobs are queued
-     *  + finish all jobs on the queue at this moment, then terminate.
+     * tell the worker thread to gracefully terminate. We have a choice to make: +
+     * abort abruptly, killing whatever's in flight + finish the current job, then
+     * killing the thread, even if + more jobs are queued + finish all jobs on the
+     * queue at this moment, then terminate.
      *
      * We can play with all three.
      *
@@ -96,10 +102,7 @@ public class ActiveObject {
      * complete).
      */
     public void terminate() {
-        synchronized (this) {
-            shouldTerminate = true;
-            notifyAll();
-        }
+        shouldTerminate = true;
     }
 
     /**
@@ -110,19 +113,14 @@ public class ActiveObject {
         // sleep. When the queue has contents, pop them off and run.
         while (true) {
             AOTask r = null;
-            synchronized (this) {
-                while (jobs.isEmpty() && !shouldTerminate) {
-                    try {
-                        wait();
-                    } catch (InterruptedException e) {
-                    }
-                }
-                if (shouldTerminate)
-                    return;
-
-                r = jobs.poll();
+            while (!shouldTerminate) {
+                try {
+                    r = jobs.poll(1, TimeUnit.MINUTES);
+                } catch (InterruptedException e) {}
+            
+                r.runAndComplete();
             }
-            r.runAndComplete();
+            return;
         }
     }
 
@@ -132,16 +130,14 @@ public class ActiveObject {
     public void workUntilCompleted(Future future) {
         while (!future.isComplete()) {
             AOTask r = null;
-            synchronized (this) {
-                while (jobs.isEmpty() && !shouldTerminate && !future.isComplete()) {
-                     try { wait(2); }
-                    catch (InterruptedException e) { }
-                }
-                if (shouldTerminate || future.isComplete())
-                    return;
-
-                r = jobs.poll();
+            while (!shouldTerminate && !future.isComplete()) {
+                try { r = jobs.poll(1, TimeUnit.MINUTES); }
+                catch (InterruptedException e) { }
             }
+            if (shouldTerminate || future.isComplete())
+                return;
+
+            r = jobs.poll();
             r.runAndComplete();
         }
 	}
