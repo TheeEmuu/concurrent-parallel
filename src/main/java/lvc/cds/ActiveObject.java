@@ -1,11 +1,12 @@
 package lvc.cds;
 
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 public class ActiveObject {
-    private LinkedBlockingQueue<AOTask> jobs;
+    private BlockingQueue<AOTask> jobs;
     private Thread workerThread;
     private boolean shouldTerminate;
     private Scheduler scheduler;
